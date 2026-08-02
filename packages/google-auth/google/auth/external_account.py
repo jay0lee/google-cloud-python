@@ -479,14 +479,31 @@ class Credentials(
 
         # Inject client certificate into request.
         if self._mtls_required():
-            # Only inject cert= when key_path is not None.  For hardware-
-            # backed keys (TPM/Secure Enclave) key_path is None and the
-            # mTLS adapter handles signing via ECP callbacks instead.
             _cert_path, _key_path = self._get_mtls_cert_and_key_paths()
             if _key_path is not None:
+                # File-based key: inject cert= directly.
                 request = functools.partial(
                     request, cert=(_cert_path, _key_path)
                 )
+            else:
+                # Hardware-backed key (TPM / Secure Enclave): the private
+                # key cannot be extracted, so cert= won't work.  Instead,
+                # create an mTLS-aware transport that delegates signing to
+                # the ECP TLS offload library via _MutualTlsOffloadAdapter.
+                from google.auth.transport.requests import (  # lazy import
+                    Request as _Request,
+                    _MutualTlsOffloadAdapter,
+                )
+                import requests as _requests
+
+                _session = _requests.Session()
+                _session.mount(
+                    "https://",
+                    _MutualTlsOffloadAdapter(
+                        self._certificate_config_location
+                    ),
+                )
+                request = _Request(session=_session)
 
         if self._should_initialize_impersonated_credentials():
             with self._impersonation_lock:
