@@ -497,11 +497,23 @@ class Credentials(
                 import requests as _requests
 
                 _session = _requests.Session()
+                # Resolve certificate config path: explicit location,
+                # GOOGLE_API_CERTIFICATE_CONFIG env var, or default path.
+                _config_path = getattr(
+                    self, "_certificate_config_location", None
+                )
+                if not _config_path:
+                    import os as _os
+
+                    _config_path = _os.environ.get(
+                        "GOOGLE_API_CERTIFICATE_CONFIG",
+                        _os.path.expanduser(
+                            "~/.config/gcloud/certificate_config.json"
+                        ),
+                    )
                 _session.mount(
                     "https://",
-                    _MutualTlsOffloadAdapter(
-                        self._certificate_config_location
-                    ),
+                    _MutualTlsOffloadAdapter(_config_path),
                 )
                 request = _Request(session=_session)
 
