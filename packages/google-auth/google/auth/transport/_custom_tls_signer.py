@@ -195,6 +195,22 @@ def get_cert(signer_lib, config_file_path):
         0,  # certHolderLen
     )
     if cert_len == 0:
+        # Fallback: ECP may not be able to access the keystore directly
+        # (e.g. Secure Enclave keys on macOS).  Try reading the cert from
+        # the cert_path specified in the certificate config.
+        try:
+            import json as _json
+
+            with open(config_file_path, "r") as _f:
+                _cfg = _json.load(_f)
+            _cert_path = (
+                _cfg.get("cert_configs", {}).get("workload", {}).get("cert_path")
+            )
+            if _cert_path:
+                with open(_cert_path, "rb") as _cf:
+                    return _cf.read()
+        except Exception:
+            pass
         raise exceptions.MutualTLSChannelError("failed to get certificate")
 
     # Then we create an array to hold the cert, and call again to fill the cert

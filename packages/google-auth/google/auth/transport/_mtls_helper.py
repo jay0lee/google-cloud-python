@@ -476,14 +476,16 @@ def _get_workload_cert_and_key_paths(config_path, include_context_aware=True):
         return None, None
     workload = cert_configs["workload"]
 
-    if "cert_path" not in workload or "key_path" not in workload:
+    if "cert_path" not in workload:
         raise exceptions.ClientCertError(
-            'Workload certificate configuration is missing "cert_path" or "key_path" in {}'.format(
+            'Workload certificate configuration is missing "cert_path" in {}'.format(
                 absolute_path
             )
         )
     cert_path = workload["cert_path"]
-    key_path = workload["key_path"]
+    # key_path is optional — hardware-backed keys (TPM, Secure Enclave)
+    # have no extractable private key file on disk.
+    key_path = workload.get("key_path")
 
     return cert_path, key_path
 
