@@ -562,6 +562,45 @@ class AuthorizedSession(requests.Session):
             if hasattr(self, "_cached_cert"):
                 del self._cached_cert
 
+    def configure_mtls_offload_channel(self, enterprise_cert_file_path):
+        """Configure mTLS using ECP hardware-backed signing offload.
+
+        This mounts a ``_MutualTlsOffloadAdapter`` that delegates TLS client
+        authentication to the Enterprise Certificate Proxy (ECP), which
+        performs signing using hardware-backed keys (TPM, Secure Enclave,
+        CNG, etc.).
+
+        Unlike :meth:`configure_mtls_channel`, which requires software
+        cert and key bytes, this method offloads all cryptographic
+        operations to the ECP shared libraries specified in the
+        enterprise cert configuration file.
+
+        Args:
+            enterprise_cert_file_path (str): Path to the enterprise
+                certificate configuration JSON file.  The file must
+                contain a ``libs`` section pointing to the ECP shared
+                libraries::
+
+                    {
+                        "libs": {
+                            "ecp_client": "/path/to/libecp.so",
+                            "tls_offload": "/path/to/libtls_offload.so"
+                        }
+                    }
+
+        Raises:
+            google.auth.exceptions.MutualTLSChannelError: If the
+                offload adapter could not be created (e.g. missing or
+                invalid ECP libraries).
+        """
+        adapter = _MutualTlsOffloadAdapter(enterprise_cert_file_path)
+        self.mount("https://", adapter)
+        self._is_mtls = True
+
+        if self._auth_request_session is not None:
+            auth_adapter = _MutualTlsOffloadAdapter(enterprise_cert_file_path)
+            self._auth_request_session.mount("https://", auth_adapter)
+
     def request(
         self,
         method,
