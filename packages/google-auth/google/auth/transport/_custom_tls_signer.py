@@ -60,7 +60,13 @@ def _cast_ssl_ctx_to_void_p_stdlib(context):
             "Custom TLS signing is only supported on standard release CPython runtimes."
         )
 
-    offset = sys.getsizeof(object())
+    # Use a stable offset to reach the SSL_CTX* inside CPython's
+    # PySSLContext struct.  The previous formula
+    #     sys.getsizeof(object())
+    # broke on Python 3.14 because the PyObject header size changed.
+    # ctypes.sizeof(c_void_p) * 2 equals the ob_refcnt + ob_type
+    # header and is consistent across CPython versions.
+    offset = ctypes.sizeof(ctypes.c_void_p) * 2
     return ctypes.c_void_p.from_address(id(context) + offset)
 
 
