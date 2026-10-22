@@ -259,9 +259,6 @@ def _token_endpoint_request(
             content type. The default value is False.
         can_retry (bool): Enable or disable request retry behavior.
         headers (Optional[Mapping[str, str]]): The headers for the request.
-        return_response_headers (Optional[bool]): If True, the response
-            headers will be included as a fourth element in the returned
-            tuple.  The default value is False.
         kwargs: Additional arguments passed on to the request method. The
             kwargs will be passed to `requests.request` method, see:
             https://docs.python-requests.org/en/latest/api/#requests.request.

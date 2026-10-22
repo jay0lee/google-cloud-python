@@ -97,7 +97,7 @@ def session_from_client_secrets_file(client_secrets_file, scopes, **kwargs):
     return session_from_client_config(client_config, scopes, **kwargs)
 
 
-def credentials_from_session(session, client_config=None):
+def credentials_from_session(session, client_config=None, dpop_signer=None):
     """Creates :class:`google.oauth2.credentials.Credentials` from a
     :class:`requests_oauthlib.OAuth2Session`.
 
@@ -107,11 +107,19 @@ def credentials_from_session(session, client_config=None):
     This allows you to use the credentials from the session with Google
     API client libraries.
 
+    When *dpop_signer* is provided, returns a
+    :class:`google.oauth2.dpop_credentials.DPoPCredentials` instance
+    instead, binding the token to the given DPoP key.
+
     Args:
         session (requests_oauthlib.OAuth2Session): The OAuth 2.0 session.
         client_config (Mapping[str, Any]): The subset of the client
             configuration to use. For example, if you have a web client
             you would pass in `client_config['web']`.
+        dpop_signer (Optional[google.auth.dpop.DPoPSigner]): A DPoP
+            signer.  When provided, the returned credentials will be a
+            :class:`~google.oauth2.dpop_credentials.DPoPCredentials`
+            instance bound to this key.
 
     Returns:
         google.oauth2.credentials.Credentials: The constructed credentials.
@@ -135,6 +143,22 @@ def credentials_from_session(session, client_config=None):
             client_secret=client_config.get("client_secret"),
             token_info_url=client_config.get("token_info_url"),
             scopes=session.scope,
+        )
+    elif dpop_signer is not None:
+        from google.oauth2 import dpop_credentials
+
+        dpop_nonce = getattr(session, "_dpop_nonce", None)
+        credentials = dpop_credentials.DPoPCredentials(
+            session.token["access_token"],
+            dpop_signer=dpop_signer,
+            dpop_nonce=dpop_nonce,
+            refresh_token=session.token.get("refresh_token"),
+            id_token=session.token.get("id_token"),
+            token_uri=client_config.get("token_uri"),
+            client_id=client_config.get("client_id"),
+            client_secret=client_config.get("client_secret"),
+            scopes=session.scope,
+            granted_scopes=session.token.get("scope"),
         )
     else:
         credentials = google.oauth2.credentials.Credentials(

@@ -53,6 +53,7 @@ import errno
 import hashlib
 import json
 import logging
+import urllib.parse
 from base64 import urlsafe_b64encode
 
 try:
@@ -102,6 +103,7 @@ class Flow(object):
         redirect_uri=None,
         code_verifier=None,
         autogenerate_code_verifier=True,
+        dpop_signer=None,
     ):
         """
         Args:
@@ -118,9 +120,18 @@ class Flow(object):
                 the key exchange.using PKCE.
             autogenerate_code_verifier (bool): If true, auto-generate a
                 code_verifier.
+            dpop_signer (Optional[google.auth.dpop.DPoPSigner]): A DPoP
+                signer for Demonstrating Proof-of-Possession
+                (`RFC 9449`_).  When provided, the authorization URL
+                will include the ``dpop_jkt`` parameter, the token
+                exchange will attach a DPoP proof header, and the
+                resulting credentials will be
+                :class:`~google.oauth2.dpop_credentials.DPoPCredentials`.
+
         .. _client secrets:
             https://github.com/googleapis/google-api-python-client/blob
             /main/docs/client-secrets.md
+        .. _RFC 9449: https://www.rfc-editor.org/rfc/rfc9449
         """
         self.client_type = client_type
         """str: The client type, either ``'web'`` or ``'installed'``"""
@@ -131,6 +142,9 @@ class Flow(object):
         self.redirect_uri = redirect_uri
         self.code_verifier = code_verifier
         self.autogenerate_code_verifier = autogenerate_code_verifier
+        self.dpop_signer = dpop_signer
+        """Optional[google.auth.dpop.DPoPSigner]: The DPoP signer."""
+        self._dpop_hook_registered = False
 
     @classmethod
     def from_client_config(cls, client_config, scopes, **kwargs):
@@ -165,6 +179,7 @@ class Flow(object):
         # these args cannot be passed to requests_oauthlib.OAuth2Session
         code_verifier = kwargs.pop("code_verifier", None)
         autogenerate_code_verifier = kwargs.pop("autogenerate_code_verifier", True)
+        dpop_signer = kwargs.pop("dpop_signer", None)
 
         (
             session,
@@ -182,6 +197,7 @@ class Flow(object):
             redirect_uri,
             code_verifier,
             autogenerate_code_verifier,
+            dpop_signer=dpop_signer,
         )
 
     @classmethod
@@ -228,6 +244,10 @@ class Flow(object):
         Google's authorization server) and specifies that "offline" access is
         desired. This is required in order to obtain a refresh token.
 
+        When a ``dpop_signer`` was provided, the authorization URL will
+        include the ``dpop_jkt`` parameter so the authorization server
+        can bind the resulting authorization code to the DPoP key.
+
         Args:
             kwargs: Additional arguments passed through to
                 :meth:`requests_oauthlib.OAuth2Session.authorization_url`
@@ -255,6 +275,10 @@ class Flow(object):
             code_challenge = b64_challenge.decode().split("=")[0]
             kwargs.setdefault("code_challenge", code_challenge)
             kwargs.setdefault("code_challenge_method", "S256")
+
+        if self.dpop_signer is not None:
+            kwargs.setdefault("dpop_jkt", self.dpop_signer.thumbprint)
+
         url, state = self.oauth2session.authorization_url(
             self.client_config["auth_uri"], **kwargs
         )
@@ -272,6 +296,10 @@ class Flow(object):
         and specifies the client configuration's token URI (usually Google's
         token server).
 
+        When a ``dpop_signer`` was provided, a DPoP proof JWT is
+        attached to the token request and a compliance hook captures
+        the ``DPoP-Nonce`` response header for future requests.
+
         Args:
             kwargs: Arguments passed through to
                 :meth:`requests_oauthlib.OAuth2Session.fetch_token`. At least
@@ -286,7 +314,73 @@ class Flow(object):
         """
         kwargs.setdefault("client_secret", self.client_config["client_secret"])
         kwargs.setdefault("code_verifier", self.code_verifier)
+
+        if self.dpop_signer is not None:
+            self._inject_dpop_into_fetch_token(kwargs)
+
         return self.oauth2session.fetch_token(self.client_config["token_uri"], **kwargs)
+
+    def _inject_dpop_into_fetch_token(self, kwargs):
+        """Prepares DPoP proof header and hooks for a token request.
+
+        Extracts the authorization code (from ``code`` or
+        ``authorization_response``), creates a DPoP proof JWT with
+        ``jti = BASE64URL(SHA-256(code))`` per Google's DPoP
+        requirements, and registers a compliance hook to capture the
+        ``DPoP-Nonce`` response header.
+
+        Args:
+            kwargs (dict): The keyword arguments that will be passed to
+                :meth:`requests_oauthlib.OAuth2Session.fetch_token`.
+                Modified in place to include DPoP headers.
+        """
+        from google.auth import dpop
+
+        # Extract the authorization code for the jti computation.
+        code = kwargs.get("code")
+        if not code and kwargs.get("authorization_response"):
+            parsed = urllib.parse.urlparse(kwargs["authorization_response"])
+            params = dict(urllib.parse.parse_qsl(parsed.query))
+            code = params.get("code")
+
+        token_uri = self.client_config["token_uri"]
+        proof_kwargs = {}
+        if code:
+            proof_kwargs["jti"] = dpop.compute_auth_code_jti(code)
+
+        proof = self.dpop_signer.create_proof(
+            "POST",
+            token_uri,
+            nonce=getattr(self.oauth2session, "_dpop_nonce", None),
+            **proof_kwargs,
+        )
+
+        headers = dict(
+            kwargs.get("headers")
+            or {
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+            }
+        )
+        headers["DPoP"] = proof
+        kwargs["headers"] = headers
+
+        # Register a compliance hook to capture DPoP-Nonce from the
+        # response.  Store it on the session so credentials_from_session()
+        # can pick it up.  Only register once to avoid accumulating
+        # duplicate hooks across multiple fetch_token() calls.
+        if not self._dpop_hook_registered:
+
+            def _capture_dpop_nonce(response):
+                nonce = dpop.extract_dpop_nonce(response.headers)
+                if nonce:
+                    self.oauth2session._dpop_nonce = nonce
+                return response
+
+            self.oauth2session.register_compliance_hook(
+                "access_token_response", _capture_dpop_nonce
+            )
+            self._dpop_hook_registered = True
 
     @property
     def credentials(self):
@@ -296,6 +390,10 @@ class Flow(object):
         constructs a :class:`google.oauth2.credentials.Credentials` class using
         the session's token and the client config.
 
+        When a ``dpop_signer`` was provided, returns a
+        :class:`~google.oauth2.dpop_credentials.DPoPCredentials` instance
+        instead.
+
         Returns:
             google.oauth2.credentials.Credentials: The constructed credentials.
 
@@ -303,7 +401,7 @@ class Flow(object):
             ValueError: If there is no access token in the session.
         """
         return google_auth_oauthlib.helpers.credentials_from_session(
-            self.oauth2session, self.client_config
+            self.oauth2session, self.client_config, dpop_signer=self.dpop_signer
         )
 
     def authorized_session(self):

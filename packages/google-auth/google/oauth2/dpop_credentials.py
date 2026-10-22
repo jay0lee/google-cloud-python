@@ -389,4 +389,3 @@ class DPoPCredentials(_oauth2_credentials.Credentials):
         with io.open(filename, "r", encoding="utf-8") as json_file:
             data = json.load(json_file)
             return cls.from_authorized_user_info(data, scopes, dpop_signer=dpop_signer)
-

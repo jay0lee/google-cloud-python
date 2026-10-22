@@ -163,9 +163,7 @@ class TestDPoPCredentials(object):
 
         assert "DPoP" not in headers
 
-    @mock.patch.object(
-        _oauth2_credentials.Credentials, "_after_refresh", autospec=True
-    )
+    @mock.patch.object(_oauth2_credentials.Credentials, "_after_refresh", autospec=True)
     def test_after_refresh_calls_super(self, mock_parent_after_refresh):
         signer = self.make_dpop_signer()
         creds = self.make_credentials(dpop_signer=signer)
@@ -444,9 +442,7 @@ class TestDPoPCredentials(object):
         assert access_token == "new-access-token"
 
     @mock.patch("google.oauth2._client._token_endpoint_request_no_throw")
-    def test_refresh_rapt_challenge_without_reauth_raises(
-        self, mock_token_request
-    ):
+    def test_refresh_rapt_challenge_without_reauth_raises(self, mock_token_request):
         signer = self.make_dpop_signer()
         creds = self.make_credentials(dpop_signer=signer)
         creds._enable_reauth_refresh = False
